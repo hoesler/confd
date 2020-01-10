@@ -119,8 +119,10 @@ func (c *Client) watchChanges(watcher *fsnotify.Watcher, stopChan chan bool) Res
 					outputChannel <- ResultError{response: 1, err: nil}
 				}
 			case err := <-watcher.Errors:
+				log.Debug(fmt.Sprintf("Watcher Error: %v", err))
 				outputChannel <- ResultError{response: 0, err: err}
 			case <-stopChan:
+				log.Debug(fmt.Sprintf("Watcher Stop"))
 				outputChannel <- ResultError{response: 1, err: nil}
 			}
 		}
@@ -161,7 +163,9 @@ func (c *Client) WatchPrefix(prefix string, keys []string, waitIndex uint64, sto
 			}
 		}
 	}
+	log.Debug(fmt.Sprintf("Started watching for changes"))
 	output := c.watchChanges(watcher, stopChan)
+	log.Debug(fmt.Sprintf("Received watcher response: %v", output))
 	if output.response != 2 {
 		return output.response, output.err
 	}
