@@ -2,15 +2,14 @@ package file
 
 import (
 	"fmt"
-	"io/ioutil"
-	"path"
-	"strconv"
-	"strings"
-
 	"github.com/fsnotify/fsnotify"
 	"github.com/kelseyhightower/confd/log"
 	"github.com/kelseyhightower/confd/util"
 	"gopkg.in/yaml.v2"
+	"io/ioutil"
+	"path"
+	"strconv"
+	"strings"
 )
 
 var replacer = strings.NewReplacer("/", "_")
@@ -19,6 +18,7 @@ var replacer = strings.NewReplacer("/", "_")
 type Client struct {
 	filepath []string
 	filter   string
+	watcher  fsnotify.Watcher
 }
 
 type ResultError struct {
@@ -111,7 +111,7 @@ func (c *Client) watchChanges(watcher *fsnotify.Watcher, stopChan chan bool) Res
 	go func() {
 		select {
 		case event := <-watcher.Events:
-			log.Debug(fmt.Sprintf("Event: %s", event))
+			log.Debug(fmt.Sprintf("Watcher event: %s", event))
 			if event.Op&fsnotify.Write == fsnotify.Write ||
 				event.Op&fsnotify.Remove == fsnotify.Remove ||
 				event.Op&fsnotify.Create == fsnotify.Create {
@@ -119,11 +119,10 @@ func (c *Client) watchChanges(watcher *fsnotify.Watcher, stopChan chan bool) Res
 			}
 			return
 		case err := <-watcher.Errors:
-			log.Debug(fmt.Sprintf("Watcher Error: %v", err))
+			log.Error(fmt.Sprintf("Watcher event error: %v", err))
 			outputChannel <- ResultError{response: 0, err: err}
 			return
 		case <-stopChan:
-			log.Debug(fmt.Sprintf("Watcher Stop"))
 			outputChannel <- ResultError{response: 1, err: nil}
 		}
 	}()
@@ -135,37 +134,42 @@ func (c *Client) WatchPrefix(prefix string, keys []string, waitIndex uint64, sto
 		return 1, nil
 	}
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return 0, err
-	}
-	defer watcher.Close()
-	for _, path := range c.filepath {
-		isDir, err := util.IsDirectory(path)
+	if &c.watcher == nil {
+		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
 			return 0, err
 		}
-		if isDir {
-			dirs, err := util.RecursiveDirsLookup(path, "*")
+		for _, path := range c.filepath {
+			isDir, err := util.IsDirectory(path)
 			if err != nil {
 				return 0, err
 			}
-			for _, dir := range dirs {
-				err = watcher.Add(dir)
+			if isDir {
+				dirs, err := util.RecursiveDirsLookup(path, "*")
+				if err != nil {
+					return 0, err
+				}
+				for _, dir := range dirs {
+					err = watcher.Add(dir)
+					if err != nil {
+						return 0, err
+					}
+				}
+			} else {
+				err = watcher.Add(path)
 				if err != nil {
 					return 0, err
 				}
 			}
-		} else {
-			err = watcher.Add(path)
-			if err != nil {
-				return 0, err
-			}
 		}
+		go func() {
+			defer watcher.Close()
+			<-stopChan
+		}()
+		c.watcher = *watcher
 	}
-	log.Debug(fmt.Sprintf("Started watching for changes: %v", watcher))
-	output := c.watchChanges(watcher, stopChan)
-	log.Debug(fmt.Sprintf("Received watcher response: %v", output))
+
+	output := c.watchChanges(&c.watcher, stopChan)
 	if output.response != 2 {
 		return output.response, output.err
 	}
