@@ -9,7 +9,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/kelseyhightower/confd/log"
-	util "github.com/kelseyhightower/confd/util"
+	"github.com/kelseyhightower/confd/util"
 	"gopkg.in/yaml.v2"
 )
 
@@ -107,24 +107,24 @@ func nodeWalk(node interface{}, key string, vars map[string]string) error {
 
 func (c *Client) watchChanges(watcher *fsnotify.Watcher, stopChan chan bool) ResultError {
 	outputChannel := make(chan ResultError)
-	go func() error {
-		defer close(outputChannel)
-		for {
-			select {
-			case event := <-watcher.Events:
-				log.Debug(fmt.Sprintf("Event: %s", event))
-				if event.Op&fsnotify.Write == fsnotify.Write ||
-					event.Op&fsnotify.Remove == fsnotify.Remove ||
-					event.Op&fsnotify.Create == fsnotify.Create {
-					outputChannel <- ResultError{response: 1, err: nil}
-				}
-			case err := <-watcher.Errors:
-				log.Debug(fmt.Sprintf("Watcher Error: %v", err))
-				outputChannel <- ResultError{response: 0, err: err}
-			case <-stopChan:
-				log.Debug(fmt.Sprintf("Watcher Stop"))
+	defer close(outputChannel)
+	go func() {
+		select {
+		case event := <-watcher.Events:
+			log.Debug(fmt.Sprintf("Event: %s", event))
+			if event.Op&fsnotify.Write == fsnotify.Write ||
+				event.Op&fsnotify.Remove == fsnotify.Remove ||
+				event.Op&fsnotify.Create == fsnotify.Create {
 				outputChannel <- ResultError{response: 1, err: nil}
 			}
+			return
+		case err := <-watcher.Errors:
+			log.Debug(fmt.Sprintf("Watcher Error: %v", err))
+			outputChannel <- ResultError{response: 0, err: err}
+			return
+		case <-stopChan:
+			log.Debug(fmt.Sprintf("Watcher Stop"))
+			outputChannel <- ResultError{response: 1, err: nil}
 		}
 	}()
 	return <-outputChannel
@@ -163,7 +163,7 @@ func (c *Client) WatchPrefix(prefix string, keys []string, waitIndex uint64, sto
 			}
 		}
 	}
-	log.Debug(fmt.Sprintf("Started watching for changes"))
+	log.Debug(fmt.Sprintf("Started watching for changes: %v", watcher))
 	output := c.watchChanges(watcher, stopChan)
 	log.Debug(fmt.Sprintf("Received watcher response: %v", output))
 	if output.response != 2 {
